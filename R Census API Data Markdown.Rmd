@@ -1,0 +1,202 @@
+#Accessing the Census API and creating the geoJSON files
+
+#0) Libraries and API Keys
+
+API Key is kept in the `data` subdirectory of this project.  It is ignored by `.git` therefore any clone of this project will need to create a new data subdirectory with their own key saved.
+
+```{r}
+library(magrittr)
+library(tidyverse)
+library(tidycensus)
+library (sf)
+library(geojsonio)
+library(rgdal)
+library(geojsonR)
+
+
+options(tigris_use_cache = TRUE)
+key <- read.delim(file="data/Census Api Key.txt",header=FALSE)
+Sys.setenv(census_api_key=key[[1]])
+```
+
+
+
+#1) Zip Code Tabulation Area with Data
+First we need to define juveniles.  In Louisiana, Juvenile is generally classified as ages *10-17* years old for all non-violent crimes and *10-14* years old for violent crimes - CH 305  - http://legis.la.gov/legis/law.aspx?d=73103.  
+
+Our data reflects incidents from 2017-2019.  Juvenile laws in Louisiana changed in 2016 and went into practice in March of 2019 that changed persons to be prosecutated at age 17 as a juvenile.  Prior to this they were prosecuted at 17 as adults.
+
+We will need to create census figures for this project.  It is of my opinion that we should be using the age range of 10-17 years old to estimate juvenile population.  We will create a variable `acs.ages` to hold the parameters needed to create these variables.  The documentation for census api variables is located at the following address -> https://api.census.gov/data/2017/acs/acs5/variables.html
+
+The following chunk then uses `acs.ages.juvenile` tho access the census api through `tidycensus`.  The results are saved in the variable `zip` and then summarized into their appropriate   
+
+
+```{r }
+#acs.ages.youth will not be used for this project, but is kept for alternative use and defined as 0-24
+acs.ages.youth <- c("B01001_003","B01001_004","B01001_005","B01001_006",
+              "B01001_007","B01001_008","B01001_009","B01001_010",
+              "B01001_027","B01001_028","B01001_029","B01001_030",
+              "B01001_031","B01001_032","B01001_033","B01001_034")
+
+acs.ages.juvenile <- c("B01001_006", "B01001_007","B01001_029","B01001_030")
+
+zip <- st_as_sf(get_acs(geography="zcta",
+                 variables=acs.ages.juvenile,geometry=TRUE))
+View(head(zip))
+zip <- zip %>%
+  group_by(GEOID,NAME) %>% 
+  summarize(zip_estimate = round(sum(estimate),2),
+            zip_moe = round(moe_sum(moe,estimate=estimate),2)
+            )
+
+zip <- zip %>% ungroup()
+zip <- zip %>% 
+
+  mutate(
+    zip_area=st_area(geometry)* 0.000000386102159,
+    zip_estimate_density = round((zip_estimate/zip_area),2),
+    zip_moe_density = round((zip_moe/zip_area),2)
+  )
+
+
+n.distinct.zip <- zip %>% 
+  summarize(n_distinct(NAME))
+```
+#2) city polygons
+
+Current hiccups in this process include:
+
+[.] Some files (`polygon.nola` and `polygon.zcta`) can only be found at data.nola.gov with vital information missing from the .geoJSON file class.  Only .shp .kml zip files can be downloaded - when downloaded they have a uniquely generated file name in zip files.  Therefore creating a programmatic solution for accessing these files will take some time on another day.  Right now I'm manually downloading then into the appropriate directory and hardcoding their addresses into the chunks below.  I'll address this later when I've got time or just tell data.nola.gov and tell them to fix their .geoJSON files...
+
+
+##2.1) city council district polygons
+Saved as `polygon.district`.  Accessed from opendata.arcgis.com.  Councilmember headshots taken from city council website [insert address here when you've got time] and then they were manually downloaded into an images subdirectory of this report.  The quality of these images are not good - should either contact city council or find better photos.
+```{r}
+
+polygon.district <- st_read("https://opendata.arcgis.com/datasets/4593a994e7644bcc91d9e1c096df1734_0.geojson")
+
+
+#coded in separate steps for legibility - didn't really work, as this is unlegibile still.  Shoul use a switch or function or something.  Will work on when I've got time...
+
+
+
+polygon.district <- polygon.district %>% 
+  mutate(img=if_else(DISTRICTID=='A','images/Joe-Giarrusso-sm.jpg',
+                     if_else(DISTRICTID=='B','images/Jay-H-Banks-sm.jpg',
+                             if_else(DISTRICTID=='C','images/Kristen-Gisleson-Palmer-sm.jpg',
+                                     if_else(DISTRICTID=='D','images/Jared-Brossett-sm.jpg',
+                                             if_else(DISTRICTID=='E','images/Cyndi-Nguyen-sm.jpg',
+                                                     'null.png')))) )
+  )
+
+
+
+polygon.district <- polygon.district %>% 
+  mutate(web_link=if_else(DISTRICTID=='A','<a href="https://council.nola.gov/councilmembers/joseph-giarrusso/">Joeseph I. Giarrusso III</a>',
+                     if_else(DISTRICTID=='B','<a href="https://council.nola.gov/councilmembers/jay-banks/">Jay H. Banks</a>',
+                             if_else(DISTRICTID=='C','<a href="https://council.nola.gov/councilmembers/kristin-gisleson-palmer/">Kristen Gisleson Palmer</a>',
+                                     if_else(DISTRICTID=='D','<a href="https://council.nola.gov/councilmembers/jared-brossett/">Jared C. Brossett</a>',
+                                             if_else(DISTRICTID=='E','<a href="https://council.nola.gov/councilmembers/cyndi-nguyen/">Cyndi Nguyen</a>',
+                                                     'null.png')))) )
+  )
+
+
+polygon.district <- polygon.district %>% 
+  mutate(email_link=if_else(DISTRICTID=='A','<A HREF="mailto:Joseph.Giarrusso@nola.gov">Email</A>',
+                              if_else(DISTRICTID=='B','<A HREF="mailto:Jay.Banks@nola.gov> Email</A>',
+                                      if_else(DISTRICTID=='C','<A HREF="mailto:Kristin.Palmer@nola.gov> Email</A>',
+                                              if_else(DISTRICTID=='D','<A HREF="mailto:councildistrictd@nola.gov> Email</A>',
+                                                      if_else(DISTRICTID=='E','A HREF="mailto:Cyndi.Nguyen@nola.gov> Email</A>',
+                                                              'null.png')))) )
+  )
+
+
+
+
+polygon.district <- polygon.district %>% 
+  mutate(twitter_link=if_else(DISTRICTID=='A','<a href="https://twitter.com/CmGiarrusso">Twitter</a>',
+                          if_else(DISTRICTID=='B','<a href="https://twitter.com/cmjayhbanks">Twitter</a>',
+                                  if_else(DISTRICTID=='C','<a href="https://twitter.com/kgislesonpalmer">Twitter</a>',
+                                          if_else(DISTRICTID=='D','<a href="https://twitter.com/JaredCBrossett">Twitter</a>',
+                                                  if_else(DISTRICTID=='E','<a href="https://twitter.com/Vote4Cyndi">Twitter</a>',
+                                                          'null.png')))) )
+  )
+
+polygon.district <- polygon.district %>% 
+  mutate(facebook_link=if_else(DISTRICTID=='A','<a href="https://www.facebook.com/cmgiarrusso/">Facebook</a>',
+                              if_else(DISTRICTID=='B','<a href="https://www.facebook.com/JHBanks4NOLA/">Facebook</a>',
+                                      if_else(DISTRICTID=='C','<a href="https://www.facebook.com/kristin.gislesonpalmer/">Facebook</a>',
+                                              if_else(DISTRICTID=='D','<a href="https://www.facebook.com/jared.brossett/">Facebook</a>',
+                                                      if_else(DISTRICTID=='E','<a href="https://www.facebook.com/vote4cyndinguyen/">Facebook</a>',
+                                                              'null.png')))) )
+  )
+```
+
+
+##2.2) Neighborhood Statistical Areas.  
+
+These were created by The Data Center - add more info about them later.  They're supposed to have census tracts nest within them nicely.
+```{r}
+polygon.neighborhood <- st_read("https://opendata.arcgis.com/datasets/e7daa4c977d14e1b9e2fa4d7aff81e59_0.geojson")
+
+
+polygon.neighborhood <- polygon.neighborhood %>% 
+  mutate(GNOCDC_LAB = str_to_title(GNOCDC_LAB),
+         GNOCDC_LAB = str_replace(GNOCDC_LAB,"U.s.","U.S.")
+  )
+
+
+```
+##2.3) Zip Code Tabulation Area
+
+This info is also extracted from the census api, so it is unncecessary to actually use this - but it might be nice to have if you want to layer it without the added census data - so I'll keep it.
+```{r}
+polygon.zcta <- st_read("data/Zip Code Tabulation Areas - 2010/geo_export_f34e0ca6-cfc9-4601-9827-5b9e4e2de208.shp")
+```
+
+
+##2.4) Orleans Parish Boundaries
+```{r}
+polygon.nola <- st_read("data/Orleans Parish - Boundary/geo_export_825e39e1-e34f-4c7f-816d-3ae98f3a4e90.shp")
+
+```
+
+
+##3 Merge count analysis data with shape files
+
+Add better documentation later - this is actually the most important step in the whole process and needs to be better thought out.
+```{r}
+nola.zips <- polygon.zcta%>% 
+  select(zcta5ce10) %>%
+  st_drop_geometry %>% 
+  mutate(in.nola=1)
+
+
+
+polygon.nola.zip.pop <- left_join(zip,nola.zips,by=c("GEOID"="zcta5ce10"))
+polygon.nola.zip.pop <- polygon.nola.zip.pop %>% filter(in.nola==1)
+
+polygon.nola.zip.pop2 <- left_join(polygon.nola.zip.pop,zip.count,by=c("GEOID"="GEOID"))
+
+polygon.nola.zip.pop2 <- polygon.nola.zip.pop2 %>% 
+  mutate(
+         juvenilerate = ifelse(is.na(juvenileCount),0,(juvenileCount/zip_estimate)
+         
+)
+)
+polygon.nola.zip.pop2 <- polygon.nola.zip.pop2 %>% 
+  mutate(juvenileratet=juvenilerate*1000,
+         juvenileratet=round(juvenileratet,digits=2)
+         )
+```
+
+##4) Write out geoJSON files
+Some need to be filed under a wip directory because the `geojson_write` function and leaflet don't like eachother yet.  Hopefully I can address this later, as this is the most rate-limiting step in the whole process - I've got to manually use mapshaper.org to fix whatever leaflet doesn't like - I can download the mapshaper terminal to fix it but feel that's overkill.  I'll find a solution when I have time.
+
+```{r}
+geojson_write(polygon.nola.zip.pop2, file="wip-geometry/polygon-nola-zip-pop2.geoJSON", driver="GeoJSON")
+geojson_write(polygon.zcta, file="geometry/polygon-zcta.geoJSON", driver="GeoJSON")
+geojson_write(polygon.neighborhood, file="geometry/polygon-neighborhood.geoJSON", driver="GeoJSON")
+geojson_write(polygon.district, file="geometry/polygon-district.geoJSON", driver="GeoJSON")
+geojson_write(polygon.nola, file="geometry/polygon-nola.geoJSON",driver="GeoJSON")
+```
